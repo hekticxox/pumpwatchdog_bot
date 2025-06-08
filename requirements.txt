@@ -1,6 +1,5 @@
-requests
+aiohttp
 pandas
 numpy
-rich
 ta
-python-dotenv
+rich
