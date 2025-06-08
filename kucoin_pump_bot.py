@@ -14,10 +14,15 @@ from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator, MACD
 from ta.volatility import BollingerBands
 from collections import defaultdict
+import os
+from dotenv import load_dotenv
+
+# === LOAD ENV ===
+load_dotenv()
 
 # === CONFIG ===
-TELEGRAM_BOT_TOKEN = '7072447263:AAFZ6wYCgMhOQCj_iuAYccMP6LjnqPnh_l0'
-TELEGRAM_CHAT_ID = '5703735580'
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 PUMP_THRESHOLD = 0.10
 SPREAD_THRESHOLD = 0.015
 TELEGRAM_ALERT_INTERVAL = 600
@@ -142,4 +147,3 @@ Indicators: `{score}/6`"""
 
 if __name__ == "__main__":
     main()
-
