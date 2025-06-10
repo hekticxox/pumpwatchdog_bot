@@ -1,0 +1,8 @@
+# Configuration file for pumpwatchdog_bot
+
+timeframe: "1m"
+max_ohlcv: 500
+top_n: 100
+min_volume: 100000
+
+# Add further config options as needed (e.g., indicator weights, Telegram, etc.)
