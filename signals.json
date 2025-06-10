@@ -1,84 +1,86 @@
 [
   {
-    "symbol": "A/USDT",
+    "symbol": "TT/USDT",
+    "score": 5.0,
+    "meta": "RVOL, BULL, PREPUMP, MACD, VWAP",
+    "timestamp": "2025-06-10 10:30:00",
+    "log_hits": 5,
+    "triggers": [
+      "RVOL",
+      "BULL",
+      "PREPUMP",
+      "MACD",
+      "VWAP"
+    ],
+    "triggers_str": "RVOL, BULL, PREPUMP, MACD, VWAP",
+    "duration_bonus": 1,
+    "change_15m": -0.07,
+    "est_life": 15,
+    "pump_age": 1,
+    "meta_score": 5
+  },
+  {
+    "symbol": "KMD/USDT",
     "score": 4.0,
-    "meta": "MACD_DIVERGENCE, MACD, STOCH, VWAP",
-    "timestamp": "2025-06-10 10:00:00",
+    "meta": "MACD_DIVERGENCE, RETEST, MACD, VWAP",
+    "timestamp": "2025-06-10 10:30:00",
     "log_hits": 4,
     "triggers": [
       "MACD_DIVERGENCE",
+      "RETEST",
       "MACD",
-      "STOCH",
       "VWAP"
     ],
-    "triggers_str": "MACD_DIVERGENCE, MACD, STOCH, VWAP",
+    "triggers_str": "MACD_DIVERGENCE, RETEST, MACD, VWAP",
     "duration_bonus": 0,
-    "change_15m": 0.19,
+    "change_15m": -0.19,
     "est_life": 0,
     "pump_age": 0,
     "meta_score": 4
   },
   {
-    "symbol": "AAVE/USDT",
-    "score": 3.0,
-    "meta": "MACD, STOCH, VWAP",
-    "timestamp": "2025-06-10 10:00:00",
-    "log_hits": 3,
-    "triggers": [
-      "MACD",
-      "STOCH",
-      "VWAP"
-    ],
-    "triggers_str": "MACD, STOCH, VWAP",
-    "duration_bonus": 0,
-    "change_15m": 0.42,
-    "est_life": 0,
-    "pump_age": 0,
-    "meta_score": 3
-  },
-  {
-    "symbol": "1INCH/USDT",
+    "symbol": "TEL/USDT",
     "score": 2.0,
-    "meta": "MACD_DIVERGENCE, MACD",
-    "timestamp": "2025-06-10 10:00:00",
+    "meta": "BULL, VWAP",
+    "timestamp": "2025-06-10 10:30:00",
     "log_hits": 2,
     "triggers": [
-      "MACD_DIVERGENCE",
-      "MACD"
+      "BULL",
+      "VWAP"
     ],
-    "triggers_str": "MACD_DIVERGENCE, MACD",
-    "duration_bonus": 0,
-    "change_15m": 0.65,
-    "est_life": 0,
-    "pump_age": 0,
+    "triggers_str": "BULL, VWAP",
+    "duration_bonus": 2,
+    "change_15m": 0.19,
+    "est_life": 30,
+    "pump_age": 2,
     "meta_score": 2
   },
   {
-    "symbol": "1CAT/USDT",
+    "symbol": "AVA/USDT",
     "score": 1.0,
     "meta": "VWAP",
-    "timestamp": "2025-06-10 09:45:00",
+    "timestamp": "2025-06-10 10:15:00",
     "log_hits": 1,
     "triggers": [
       "VWAP"
     ],
     "triggers_str": "VWAP",
     "duration_bonus": 0,
-    "change_15m": 0.0,
+    "change_15m": 0.31,
     "est_life": 0,
     "pump_age": 0,
     "meta_score": 1
   },
   {
-    "symbol": "AA/USDT",
+    "symbol": "MTV/USDT",
     "score": 0.0,
     "meta": "",
-    "timestamp": "2025-06-10 10:00:00",
+    "timestamp": "2025-06-10 10:30:00",
     "log_hits": 0,
     "triggers": [],
     "triggers_str": "",
     "duration_bonus": 0,
-    "change_15m": -2.18,
+    "change_15m": -0.3,
     "est_life": 0,
     "pump_age": 0,
     "meta_score": 0

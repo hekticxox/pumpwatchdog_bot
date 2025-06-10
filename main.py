@@ -16,7 +16,6 @@ import numpy as np
 SIGNALS_FILE = "signals.json"
 REFRESH_INTERVAL = 60  # seconds between scans
 TOP_N = 10
-TEST_MODE = os.environ.get("TEST_MODE", "0") == "1"
 
 SCAN_SYMBOL_LIMIT = int(os.environ.get("SCAN_SYMBOL_LIMIT", 5))
 THREAD_WORKERS = int(os.environ.get("THREAD_WORKERS", 5))
@@ -40,20 +39,14 @@ def process_symbol(symbol):
     try:
         df = fetch_ohlcv_for_symbol(symbol, timeframe=TIMEFRAME)
         if df is not None and not df.empty and len(df) > 10:
-            # Get signal_triggers (dict of {indicator_name: bool})
             signal_triggers = calculate_all_indicators(df)
-            # Debug: print the signal_triggers dict for this symbol
-            print(f"DEBUG {symbol} signal_triggers: {signal_triggers}")
-            # List of triggers that fired (accept any truthy value, incl. np.bool_)
             triggered = [k for k, v in signal_triggers.items() if bool(v)]
             log_hits = len(triggered)
             triggers_str = ", ".join(triggered)
 
-            # Score/meta can be custom: for now, use count and list
             score = float(log_hits)
             meta = triggers_str
 
-            # Duration: consecutive bullish 15m candles (close > open)
             duration_bonus = 0
             closes = df["close"]
             opens = df["open"]
@@ -63,21 +56,14 @@ def process_symbol(symbol):
                 else:
                     break
 
-            # 15m %: percent change from 4 candles ago (~1 hour ago) to now
             change_15m = 0.0
             if len(df) >= 4:
                 change_15m = ((df["close"].iloc[-1] - df["close"].iloc[-4]) / df["close"].iloc[-4]) * 100
 
-            # Est Life: how long the pump has lasted (minutes)
             est_life = duration_bonus * 15
-
-            # Age: how many 15m candles since pump started (same as duration for now)
             pump_age = duration_bonus
-
-            # Meta Score: total number of positive indicators
             meta_score = log_hits
 
-            # Ensure all values are native types for JSON serialization
             result = {
                 "symbol": str(symbol),
                 "score": float(score),
@@ -140,8 +126,7 @@ def get_dashboard_data():
 
 def main():
     print("=== PumpWatchdog Bot Main Scanner ===")
-    if TEST_MODE:
-        print("Running in TEST MODE (no real alerts will be sent).")
+    print("Running in REAL-TIME MODE (fetching live KuCoin data).")
 
     import threading
     dashboard_enable = os.environ.get("DASHBOARD", "1") == "1"
@@ -157,18 +142,17 @@ def main():
         for i, s in enumerate(signals, 1):
             triggers_str = s.get('triggers_str', "")
             print(f"{i:2d}. {s['symbol']}: {s['score']:.2f} [{s['meta']}] Triggers: {triggers_str}")
-            if not TEST_MODE:
-                alert_msg = (
-                    f"🚨 Pump Signal #{i}: {s['symbol']}\n"
-                    f"Score: {s['score']:.2f}\n"
-                    f"Meta: {s['meta']}\n"
-                    f"Triggers: {triggers_str} | Duration: {s.get('duration_bonus', 0)} | "
-                    f"15m%: {s.get('change_15m', 0)} | Est Life: {s.get('est_life', 0)} | Age: {s.get('pump_age', 0)}"
-                )
-                try:
-                    send_alert(alert_msg)
-                except Exception as e:
-                    print(f"[alerts] Telegram alert exception: {e}")
+            alert_msg = (
+                f"🚨 Pump Signal #{i}: {s['symbol']}\n"
+                f"Score: {s['score']:.2f}\n"
+                f"Meta: {s['meta']}\n"
+                f"Triggers: {triggers_str} | Duration: {s.get('duration_bonus', 0)} | "
+                f"15m%: {s.get('change_15m', 0)} | Est Life: {s.get('est_life', 0)} | Age: {s.get('pump_age', 0)}"
+            )
+            try:
+                send_alert(alert_msg)
+            except Exception as e:
+                print(f"[alerts] Telegram alert exception: {e}")
         print(f"Sleeping {REFRESH_INTERVAL} seconds...\n")
         time.sleep(REFRESH_INTERVAL)
 
