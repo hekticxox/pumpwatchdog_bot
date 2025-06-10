@@ -1,25 +1,14 @@
-import logging
+import time
 from typing import List, Dict, Any, Optional
-
 from rich.table import Table
 from rich.console import Console
 from rich.live import Live
 
-def display_top_pumps(
+def build_dashboard_table(
     pump_list: List[Dict[str, Any]],
-    candidate_list: Optional[List[Dict[str, Any]]] = None,
-    refresh_interval: float = 0.5
-) -> None:
-    """
-    Displays a live dashboard of the most bullish setups using `rich`.
-
-    Args:
-        pump_list (List[Dict[str, Any]]): List of main pump dictionaries.
-        candidate_list (Optional[List[Dict[str, Any]]]): List of candidate pumps.
-        refresh_interval (float): Dashboard refresh rate in seconds.
-    """
-    console = Console()
-    table = Table(title="KuCoin Top 100 Bullish Scanner")
+    candidate_list: Optional[List[Dict[str, Any]]] = None
+) -> Table:
+    table = Table(title="KuCoin Top Bullish Scanner")
 
     table.add_column("Symbol", style="cyan", no_wrap=True)
     table.add_column("Score", justify="right")
@@ -41,7 +30,6 @@ def display_top_pumps(
         meta = f"{entry.get('meta_score', 0)}"
         table.add_row(symbol, score, triggers, duration, gain, est_life, age, meta)
 
-    # Optionally show candidate list
     if candidate_list:
         table.add_row("", "", "", "", "", "", "", "")
         for entry in candidate_list:
@@ -54,20 +42,52 @@ def display_top_pumps(
             age = f"{entry.get('pump_age', 0)}"
             meta = f"{entry.get('meta_score', 0)}"
             table.add_row(symbol, score, triggers, duration, gain, est_life, age, meta)
+    return table
 
-    # Live update the dashboard
-    with Live(table, refresh_per_second=int(1 / refresh_interval), console=console, screen=False):
-        pass  # Table is static per call; for live updating call this function repeatedly
+def live_dashboard(
+    get_data_callback,
+    refresh_interval: float = 2.0
+):
+    """
+    Calls get_data_callback() repeatedly and updates the dashboard live.
+    get_data_callback must return (pump_list, candidate_list)
+    """
+    console = Console()
+    with Live(console=console, screen=False, auto_refresh=False) as live:
+        while True:
+            pump_list, candidate_list = get_data_callback()
+            table = build_dashboard_table(pump_list, candidate_list)
+            live.update(table, refresh=True)
+            time.sleep(refresh_interval)
 
+# If run as script (demo mode)
 if __name__ == "__main__":
-    # Example usage
-    import time
-    example_pumps = [
-        {"symbol": "BTC/USDT", "score": 92.5, "log_hits": 3, "duration_bonus": 20, "change_15m": 5.1, "est_life": 30, "pump_age": 2, "meta_score": 10},
-        {"symbol": "ETH/USDT", "score": 85.2, "log_hits": 2, "duration_bonus": 15, "change_15m": 4.3, "est_life": 25, "pump_age": 1, "meta_score": 8}
-    ]
-    example_candidates = [
-        {"symbol": "DOGE/USDT", "score": 60.0, "log_hits": 1, "duration_bonus": 10, "change_15m": 2.5, "est_life": 10, "pump_age": 0, "meta_score": 3}
-    ]
-    display_top_pumps(example_pumps, example_candidates)
-    time.sleep(2)
+    import random
+
+    def demo_data():
+        # Generate fake live data
+        return [
+            {
+                "symbol": "BTC/USDT",
+                "score": random.uniform(80, 100),
+                "log_hits": random.randint(1, 5),
+                "duration_bonus": random.randint(10, 30),
+                "change_15m": random.uniform(2, 8),
+                "est_life": random.randint(10, 40),
+                "pump_age": random.randint(1, 5),
+                "meta_score": random.randint(5, 20)
+            }
+        ], [
+            {
+                "symbol": "DOGE/USDT",
+                "score": random.uniform(60, 80),
+                "log_hits": random.randint(0, 3),
+                "duration_bonus": random.randint(5, 15),
+                "change_15m": random.uniform(1, 3),
+                "est_life": random.randint(5, 15),
+                "pump_age": random.randint(0, 2),
+                "meta_score": random.randint(1, 5)
+            }
+        ]
+
+    live_dashboard(demo_data, refresh_interval=2.0)

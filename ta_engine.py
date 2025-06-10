@@ -1,107 +1,134 @@
-import pandas as pd
 import numpy as np
-from ta.trend import SMAIndicator, EMAIndicator, MACD, ADXIndicator, CCIIndicator, TRIXIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator, ROCIndicator
-from ta.volatility import BollingerBands, AverageTrueRange, DonchianChannel, KeltnerChannel
-from ta.volume import OnBalanceVolumeIndicator, ChaikinMoneyFlowIndicator, AccDistIndexIndicator
-from ta.volume import VolumeWeightedAveragePrice
+import pandas as pd
+import ta
 
-def calculate_pivot_levels(df):
-    # Classic Pivot Point
-    high = df['high'].iloc[-2]
-    low = df['low'].iloc[-2]
-    close = df['close'].iloc[-2]
-    pivot = (high + low + close) / 3
-    support = pivot - (high - low)
-    resistance = pivot + (high - low)
-    return pivot, support, resistance
+def calculate_all_indicators(df, df_1h=None):
+    indicators = {}
 
-def detect_candle_pattern(df):
-    # Simple example: Bullish engulfing and Hammer
+    # --- Classic TA ---
+    indicators['RSI'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-1]
+    indicators['MACD'] = ta.trend.MACD(df['close']).macd_diff().iloc[-1]
+    indicators['STOCH'] = ta.momentum.StochasticOscillator(df['high'], df['low'], df['close']).stoch().iloc[-1]
+    indicators['VWAP'] = vwap(df)
+    indicators['EMA21'] = ta.trend.EMAIndicator(df['close'], window=21).ema_indicator().iloc[-1]
+    indicators['EMA50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator().iloc[-1]
+    indicators['BULL'] = df['close'].iloc[-1] > df['open'].iloc[-1]
+    indicators['PB'] = price_breakout(df)
+    indicators['VOL'] = df['volume'].iloc[-1]
+
+    # --- Relative Volume (RVOL) ---
+    if len(df) >= 21:
+        indicators['RVOL'] = df['volume'].iloc[-1] / df['volume'].iloc[-21:-1].mean()
+    else:
+        indicators['RVOL'] = 1
+
+    # --- Multi-Timeframe Confluence (if 1h data passed) ---
+    if df_1h is not None:
+        bullish_1h = df_1h['close'].iloc[-1] > df_1h['open'].iloc[-1]
+        indicators['MTF_BULL'] = bullish_1h
+
+    # --- Divergence ---
+    indicators['RSI_DIVERGENCE'] = detect_rsi_bull_divergence(df)
+    indicators['MACD_DIVERGENCE'] = detect_macd_bull_divergence(df)
+
+    # --- Candle Patterns ---
+    indicators['HAMMER'] = is_hammer(df.iloc[-1])
+    indicators['ENGULFING'] = is_bullish_engulfing(df)
+
+    # --- Breakout & Retest ---
+    indicators['RETEST'] = breakout_retest(df)
+
+    # --- Simple Pattern (Triangle/Flag) ---
+    indicators['TRIANGLE'] = detect_triangle(df)
+
+    # --- Pre-pump: volume or volatility surge without price move ---
+    price_chg = (df['close'].iloc[-1] - df['close'].iloc[-4]) / df['close'].iloc[-4] if len(df) >= 4 else 0
+    indicators['PREPUMP'] = (
+        indicators['RVOL'] > 2.0 and abs(price_chg) < 0.01
+    )
+
+    # --- Signal triggers (for dashboard clarity) ---
+    # Each indicator returns True if the bullish condition is met:
+    signal_triggers = {
+        'RSI_DIVERGENCE': indicators['RSI_DIVERGENCE'],
+        'MACD_DIVERGENCE': indicators['MACD_DIVERGENCE'],
+        'RVOL': indicators['RVOL'] > 2.0,
+        'MTF_BULL': indicators.get('MTF_BULL', False),
+        'HAMMER': indicators['HAMMER'],
+        'ENGULFING': indicators['ENGULFING'],
+        'RETEST': indicators['RETEST'],
+        'PB': indicators['PB'],
+        'BULL': indicators['BULL'],
+        'TRIANGLE': indicators['TRIANGLE'],
+        'PREPUMP': indicators['PREPUMP'],
+        'MACD': indicators['MACD'] > 0,
+        'STOCH': indicators['STOCH'] > 80,
+        'VWAP': df['close'].iloc[-1] > indicators['VWAP'],
+    }
+    indicators['signal_triggers'] = signal_triggers
+    return signal_triggers
+
+# --- Helper Functions Below ---
+
+def vwap(df):
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    return (typical_price * df['volume']).cumsum().iloc[-1] / df['volume'].cumsum().iloc[-1]
+
+def price_breakout(df, window=20):
+    if len(df) < window + 1:
+        return False
+    recent_high = df['high'].iloc[-window:-1].max()
+    return df['close'].iloc[-1] > recent_high
+
+def detect_rsi_bull_divergence(df, lookback=15):
+    closes = df['close'].iloc[-lookback:]
+    rsis = ta.momentum.RSIIndicator(df['close'], window=14).rsi().iloc[-lookback:]
+    if len(closes) < 5 or rsis.isnull().any():
+        return False
+    price_ll = closes.idxmin()
+    rsi_ll = rsis.idxmin()
+    # Bullish divergence: price lower low, RSI higher low
+    return price_ll != rsi_ll and closes[price_ll] < closes.iloc[0] and rsis[price_ll] > rsis.iloc[0]
+
+def detect_macd_bull_divergence(df, lookback=15):
+    closes = df['close'].iloc[-lookback:]
+    macd_vals = ta.trend.MACD(df['close']).macd_diff().iloc[-lookback:]
+    if len(closes) < 5 or macd_vals.isnull().any():
+        return False
+    price_ll = closes.idxmin()
+    macd_ll = macd_vals.idxmin()
+    return price_ll != macd_ll and closes[price_ll] < closes.iloc[0] and macd_vals[price_ll] > macd_vals.iloc[0]
+
+def is_hammer(row):
+    body = abs(row['close'] - row['open'])
+    lower_shadow = min(row['close'], row['open']) - row['low']
+    upper_shadow = row['high'] - max(row['close'], row['open'])
+    return lower_shadow > 2 * body and body > 0 and upper_shadow < body
+
+def is_bullish_engulfing(df):
     if len(df) < 2:
-        return "None"
-    last = df.iloc[-1]
+        return False
     prev = df.iloc[-2]
-    pattern = "None"
-    # Bullish Engulfing: current bullish, body engulfs previous candle
-    if last['close'] > last['open'] and prev['close'] < prev['open']:
-        if last['close'] > prev['open'] and last['open'] < prev['close']:
-            pattern = "Bullish Engulfing"
-    # Hammer
-    body = abs(last['close'] - last['open'])
-    lower_shadow = last['open'] - last['low'] if last['open'] > last['close'] else last['close'] - last['low']
-    upper_shadow = last['high'] - last['close'] if last['close'] > last['open'] else last['high'] - last['open']
-    if body < lower_shadow and lower_shadow > 2*body and upper_shadow < body:
-        pattern = "Hammer"
-    return pattern
+    curr = df.iloc[-1]
+    prev_bear = prev['close'] < prev['open']
+    curr_bull = curr['close'] > curr['open']
+    engulf = curr['close'] > prev['open'] and curr['open'] < prev['close']
+    return prev_bear and curr_bull and engulf
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute all indicators needed for scoring_engine.py.
-    Expects df with columns: open, high, low, close, volume
-    Returns df with extra columns.
-    """
-    df = df.copy()
+def breakout_retest(df, window=20):
+    if len(df) < window + 2:
+        return False
+    recent_high = df['high'].iloc[-window:-2].max()
+    breakout = df['close'].iloc[-2] > recent_high
+    retest = abs(df['low'].iloc[-1] - recent_high) / recent_high < 0.01
+    return breakout and retest
 
-    # --- Trend Indicators
-    df['SMA_20'] = SMAIndicator(df['close'], window=20, fillna=True).sma_indicator()
-    df['SMA_50'] = SMAIndicator(df['close'], window=50, fillna=True).sma_indicator()
-    df['SMA_200'] = SMAIndicator(df['close'], window=200, fillna=True).sma_indicator()
-    df['EMA_12'] = EMAIndicator(df['close'], window=12, fillna=True).ema_indicator()
-    df['EMA_26'] = EMAIndicator(df['close'], window=26, fillna=True).ema_indicator()
-
-    macd = MACD(df['close'], window_slow=26, window_fast=12, window_sign=9, fillna=True)
-    df['MACD'] = macd.macd()
-    df['MACD_signal'] = macd.macd_signal()
-
-    df['RSI'] = RSIIndicator(df['close'], window=14, fillna=True).rsi()
-    stoch = StochasticOscillator(df['high'], df['low'], df['close'], window=14, smooth_window=3, fillna=True)
-    df['Stoch_K'] = stoch.stoch()
-    df['Stoch_D'] = stoch.stoch_signal()
-
-    adx = ADXIndicator(df['high'], df['low'], df['close'], window=14, fillna=True)
-    df['ADX'] = adx.adx()
-    df['+DI'] = adx.adx_pos()
-    df['-DI'] = adx.adx_neg()
-
-    df['CCI'] = CCIIndicator(df['high'], df['low'], df['close'], window=20, fillna=True).cci()
-    df['TRIX'] = TRIXIndicator(df['close'], window=15, fillna=True).trix()
-
-    # --- Volatility/Bands
-    boll = BollingerBands(df['close'], window=20, window_dev=2, fillna=True)
-    df['Bollinger_upper'] = boll.bollinger_hband()
-
-    df['ATR'] = AverageTrueRange(df['high'], df['low'], df['close'], window=14, fillna=True).average_true_range()
-
-    # FIX: DonchianChannel requires high, low, **close**
-    donch = DonchianChannel(high=df['high'], low=df['low'], close=df['close'], window=20, fillna=True)
-    df['Donchian_upper'] = donch.donchian_channel_hband()
-
-    kelt = KeltnerChannel(high=df['high'], low=df['low'], close=df['close'], window=20, fillna=True)
-    df['Keltner_upper'] = kelt.keltner_channel_hband()
-
-    # --- Volume & Order Flow
-    df['OBV'] = OnBalanceVolumeIndicator(df['close'], df['volume'], fillna=True).on_balance_volume()
-    df['VWAP'] = VolumeWeightedAveragePrice(
-        high=df['high'], low=df['low'], close=df['close'], volume=df['volume'], window=14, fillna=True
-    ).volume_weighted_average_price()
-    df['CMF'] = ChaikinMoneyFlowIndicator(
-        high=df['high'], low=df['low'], close=df['close'], volume=df['volume'], window=20, fillna=True
-    ).chaikin_money_flow()
-    df['AccDist'] = AccDistIndexIndicator(df['high'], df['low'], df['close'], df['volume'], fillna=True).acc_dist_index()
-
-    # --- Price Action & Oscillators
-    df['Williams_%R'] = WilliamsRIndicator(df['high'], df['low'], df['close'], lbp=14, fillna=True).williams_r()
-    df['ROC'] = ROCIndicator(df['close'], window=10, fillna=True).roc()
-
-    # --- Candle Pattern (very simple)
-    df['candle_pattern'] = "None"
-    if len(df) > 2:
-        df.iloc[-1, df.columns.get_loc('candle_pattern')] = detect_candle_pattern(df)
-
-    # --- Pivot/Fibonacci
-    pivot, fibo_support, _ = calculate_pivot_levels(df)
-    df['pivot_point'] = pivot
-    df['fibo_support'] = fibo_support
-
-    return df
+def detect_triangle(df, window=15):
+    # Simple: higher lows and lower highs over last window
+    closes = df['close'].iloc[-window:]
+    lows = df['low'].iloc[-window:]
+    highs = df['high'].iloc[-window:]
+    # Check strictly increasing lows and strictly decreasing highs
+    lows_increasing = all(x < y for x, y in zip(lows, lows[1:]))
+    highs_decreasing = all(x > y for x, y in zip(highs, highs[1:]))
+    return lows_increasing and highs_decreasing
