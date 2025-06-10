@@ -1,0 +1,16 @@
+import json
+from datetime import datetime
+
+signal = {
+    "pair": "MYRIA/USDT",
+    "entry": "0.00206",
+    "current": "0.00285",
+    "exit_target": "0.0031",
+    "confidence": "HIGH",
+    "timestamp": datetime.utcnow().isoformat() + "Z",
+    "kucoin_referral": "https://kucoin.com/r/QB123XYZ"
+}
+
+with open("signals.json", "w") as f:
+    json.dump(signal, f, indent=2)
+
