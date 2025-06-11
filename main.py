@@ -1,160 +1,283 @@
-import os
-import json
+import warnings
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.")
+
 import time
-import pandas as pd
-from dotenv import load_dotenv
+import csv
+import os
+import ccxt
+import argparse
+from indicators import get_real_indicators
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from rich.table import Table
+from rich.console import Console
+from rich.panel import Panel
+from rich.live import Live
 
-from scanner import get_all_symbols, fetch_ohlcv_for_symbol
-from alerts import send_alert
-from ta_engine import calculate_all_indicators
-from scoring_engine import calculate_score
-from dashboard import live_dashboard
+LOG_FILE = "pumpwatchdog_log.csv"
+DISPLAY_LIMIT = 20  # Show more coins
+THREAD_WORKERS = 12
 
-import numpy as np
+def get_top_usdt_pairs(n=100, exchange_name='kucoin', verbose=False):
+    try:
+        exchange = getattr(ccxt, exchange_name)()
+        tickers = exchange.fetch_tickers()
+        usdt_pairs = [
+            symbol for symbol in tickers
+            if symbol.endswith('/USDT')
+            and not symbol.startswith('BULL/')
+            and not symbol.startswith('BEAR/')
+            and not symbol.startswith('UP/')
+            and not symbol.startswith('DOWN/')
+        ]
+        usdt_pairs.sort(key=lambda s: tickers[s].get('quoteVolume', 0), reverse=True)
+        if verbose:
+            print(f"[DEBUG] Found {len(usdt_pairs)} USDT pairs, selecting top {n}.")
+        return usdt_pairs[:n]
+    except Exception as e:
+        print(f"Error fetching dynamic pairs: {e}")
+        return [
+            "UNI/USDT", "ETH/USDT", "BTC/USDT", "AVAX/USDT",
+            "DOGE/USDT", "PEPE/USDT", "LAUNCHCOIN/USDT"
+        ]
 
-SIGNALS_FILE = "signals.json"
-REFRESH_INTERVAL = 60  # seconds between scans
-TOP_N = 10
+def log_scan(rows, filename=LOG_FILE):
+    file_exists = os.path.isfile(filename)
+    with open(filename, 'a', newline='') as csvfile:
+        fieldnames = [
+            "rank", "symbol", "score", "status", "conf%", "pumptime",
+            "age", "num_triggers", "triggers"
+        ]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
-SCAN_SYMBOL_LIMIT = int(os.environ.get("SCAN_SYMBOL_LIMIT", 5))
-THREAD_WORKERS = int(os.environ.get("THREAD_WORKERS", 5))
-TIMEFRAME = '15m'
-
-load_dotenv(override=True)
-
-def json_safe(val):
-    if isinstance(val, (np.integer,)):
-        return int(val)
-    elif isinstance(val, (np.floating,)):
-        return float(val)
-    elif isinstance(val, (pd.Timestamp,)):
-        return val.isoformat()
-    elif hasattr(val, "item"):  # For np scalars
-        return val.item()
+def get_status(num_triggers, score):
+    if num_triggers >= 15:
+        return "🟢 STRONGUPTREND"
+    if score >= 10:
+        return "🔥 HOT"
+    elif score >= 7:
+        return "🚀 Pump"
+    elif score >= 4:
+        return "Watch"
+    elif score > 0:
+        return "Weak"
     else:
-        return val
+        return "N/A"
 
-def process_symbol(symbol):
+def get_status_color(status):
+    if status == "🟢 STRONGUPTREND":
+        return "bold green"
+    if status == "🔥 HOT":
+        return "bold red"
+    if status == "🚀 Pump":
+        return "bold yellow"
+    if status == "Watch":
+        return "cyan"
+    if status == "Weak":
+        return "grey50"
+    return "white"
+
+def fetch_symbol_indicators(symbol, verbose=False):
+    if verbose:
+        print(f"[VERBOSE] Starting scan for {symbol}")
     try:
-        df = fetch_ohlcv_for_symbol(symbol, timeframe=TIMEFRAME)
-        if df is not None and not df.empty and len(df) > 10:
-            signal_triggers = calculate_all_indicators(df)
-            triggered = [k for k, v in signal_triggers.items() if bool(v)]
-            log_hits = len(triggered)
-            triggers_str = ", ".join(triggered)
-
-            score = float(log_hits)
-            meta = triggers_str
-
-            duration_bonus = 0
-            closes = df["close"]
-            opens = df["open"]
-            for c, o in zip(reversed(closes), reversed(opens)):
-                if c > o:
-                    duration_bonus += 1
-                else:
-                    break
-
-            change_15m = 0.0
-            if len(df) >= 4:
-                change_15m = ((df["close"].iloc[-1] - df["close"].iloc[-4]) / df["close"].iloc[-4]) * 100
-
-            est_life = duration_bonus * 15
-            pump_age = duration_bonus
-            meta_score = log_hits
-
-            result = {
-                "symbol": str(symbol),
-                "score": float(score),
-                "meta": str(meta),
-                "timestamp": str(df.iloc[-1]["timestamp"]) if "timestamp" in df.columns else "",
-                "log_hits": int(log_hits),
-                "triggers": [str(t) for t in triggered],
-                "triggers_str": str(triggers_str),
-                "duration_bonus": int(duration_bonus),
-                "change_15m": float(round(change_15m, 2)),
-                "est_life": int(est_life),
-                "pump_age": int(pump_age),
-                "meta_score": int(meta_score),
-            }
-            return result
+        indicators, used_exchange = get_real_indicators(symbol, fallback=False, return_exchange=True)
+    except TypeError:
+        try:
+            indicators = get_real_indicators(symbol, fallback=False)
+            used_exchange = None
+        except Exception as e:
+            if verbose:
+                print(f"[DEBUG] Error in get_real_indicators for {symbol}: {e}")
+            indicators = None
+            used_exchange = None
     except Exception as e:
-        print(f"    [!] Exception for {symbol}: {e}")
-    return None
+        if verbose:
+            print(f"[DEBUG] Unexpected error in get_real_indicators for {symbol}: {e}")
+        indicators = None
+        used_exchange = None
 
-def scan_and_score():
-    all_symbols = get_all_symbols()
-    if SCAN_SYMBOL_LIMIT:
-        all_symbols = all_symbols[:SCAN_SYMBOL_LIMIT]
-    results = []
+    if indicators is None:
+        if verbose:
+            print(f"[DEBUG] No indicator data for {symbol}")
+        return (symbol, None, None)
+    if len(indicators.get("trigger_list", [])) == 0:
+        if verbose:
+            print(f"[DEBUG] No triggers fired for {symbol}")
+    else:
+        if verbose:
+            print(f"[DEBUG] {symbol}: {len(indicators.get('trigger_list', []))} triggers fired")
+    if verbose:
+        print(f"[VERBOSE] Finished scan for {symbol}")
+    return (symbol, indicators, used_exchange)
 
-    print(f"Scanning {len(all_symbols)} symbols with {THREAD_WORKERS} threads (15m candles)...")
+def build_table(symbol_rows, symbol_age, display_limit=DISPLAY_LIMIT):
+    table = Table(title="Top Bullish Coins", highlight=True, border_style="bright_magenta")
+    table.add_column("Rank", justify="right", style="bold", no_wrap=True)
+    table.add_column("Symbol", style="bold")
+    table.add_column("Score", justify="center")
+    table.add_column("Status", style="bold")
+    table.add_column("Conf%", justify="center")
+    table.add_column("PumpTime", justify="center")
+    table.add_column("Age", justify="center")
+    table.add_column("#Trig", justify="center")
+    table.add_column("Triggers", overflow="fold")
 
-    with ThreadPoolExecutor(max_workers=THREAD_WORKERS) as executor:
-        futures = {executor.submit(process_symbol, symbol): symbol for symbol in all_symbols}
-        for idx, future in enumerate(as_completed(futures), 1):
-            symbol = futures[future]
-            try:
-                res = future.result()
-                if res is not None:
-                    triggers_str = res.get('triggers_str', "")
-                    print(f"  [{idx}/{len(all_symbols)}] {symbol:<12} OK (score: {res['score']:.2f}) Triggers: {triggers_str}")
-                    results.append(res)
-                else:
-                    print(f"  [{idx}/{len(all_symbols)}] {symbol:<12} No data.")
-            except Exception as e:
-                print(f"  [{idx}/{len(all_symbols)}] {symbol:<12} ERROR: {e}")
+    display_idx = 1
+    for symbol, indicators, used_exchange in symbol_rows[:display_limit]:
+        if indicators is None:
+            continue
+        score = indicators.get("score", 0)
+        conf = indicators.get("confidence", 0)
+        pumptime = indicators.get("pumptime", "N/A")
+        age = symbol_age.get(symbol, 1)
+        triggers = indicators.get("trigger_list", [])
+        num_triggers = len(triggers)
+        trigger_str = " ".join(triggers)
+        status = get_status(num_triggers, score)
+        status_color = get_status_color(status)
+        notable = status in ["🔥 HOT", "🚀 Pump", "🟢 STRONGUPTREND"]
+        star = "★" if notable else ""
+        table.add_row(
+            f"{display_idx}{star}",
+            f"[white]{symbol}[/white]" if not notable else f"[bold magenta]{symbol}[/bold magenta]",
+            f"[bold]{score}[/bold]",
+            f"[{status_color}]{status}[/{status_color}]",
+            f"{conf}%",
+            f"{pumptime}",
+            f"{age}",
+            f"{num_triggers}",
+            f"[dim]{trigger_str}[/dim]"
+        )
+        display_idx += 1
+    return table
 
-    results.sort(key=lambda r: r["score"], reverse=True)
-    return results[:TOP_N]
-
-def persist_signals(signals):
-    try:
-        with open(SIGNALS_FILE, "w") as f:
-            json.dump(signals, f, indent=2, default=json_safe)
-    except Exception as e:
-        print(f"Failed to write signals file: {e}")
-
-def get_dashboard_data():
-    try:
-        with open(SIGNALS_FILE) as f:
-            signals = json.load(f)
-            return signals, []
-    except Exception:
-        return [], []
+def update_symbol_ages(symbol_age, top_symbols):
+    # Increment age for coins that remain in the top N
+    new_symbol_age = {}
+    for symbol in top_symbols:
+        if symbol in symbol_age:
+            new_symbol_age[symbol] = symbol_age[symbol] + 1
+        else:
+            new_symbol_age[symbol] = 1
+    return new_symbol_age
 
 def main():
-    print("=== PumpWatchdog Bot Main Scanner ===")
-    print("Running in REAL-TIME MODE (fetching live KuCoin data).")
+    parser = argparse.ArgumentParser(description='PumpWatchdog Multi-Timeframe Scanner')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Show verbose debug output')
+    args = parser.parse_args()
+    verbose = args.verbose
 
-    import threading
-    dashboard_enable = os.environ.get("DASHBOARD", "1") == "1"
-    if dashboard_enable:
-        t = threading.Thread(target=live_dashboard, args=(get_dashboard_data,), daemon=True)
-        t.start()
+    console = Console()
+    console.rule("[bold cyan]🚨 PumpWatchdog Multi-Timeframe Scanner (REAL DATA) 🚨", style="bold blue")
 
-    while True:
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Scanning markets...")
-        signals = scan_and_score()
-        persist_signals(signals)
-        print(f"Top {TOP_N} signals:")
-        for i, s in enumerate(signals, 1):
-            triggers_str = s.get('triggers_str', "")
-            print(f"{i:2d}. {s['symbol']}: {s['score']:.2f} [{s['meta']}] Triggers: {triggers_str}")
-            alert_msg = (
-                f"🚨 Pump Signal #{i}: {s['symbol']}\n"
-                f"Score: {s['score']:.2f}\n"
-                f"Meta: {s['meta']}\n"
-                f"Triggers: {triggers_str} | Duration: {s.get('duration_bonus', 0)} | "
-                f"15m%: {s.get('change_15m', 0)} | Est Life: {s.get('est_life', 0)} | Age: {s.get('pump_age', 0)}"
-            )
-            try:
-                send_alert(alert_msg)
-            except Exception as e:
-                print(f"[alerts] Telegram alert exception: {e}")
-        print(f"Sleeping {REFRESH_INTERVAL} seconds...\n")
-        time.sleep(REFRESH_INTERVAL)
+    symbol_age = {}
+
+    try:
+        while True:
+            cycle_start_time = time.time()
+            SYMBOLS = get_top_usdt_pairs(n=100, verbose=verbose)
+            result_rows = []
+            symbol_rows = []
+            notable_coins = []
+
+            if not SYMBOLS:
+                console.print("[yellow][DEBUG] No symbols found from exchange.[/yellow]")
+                time.sleep(60)
+                continue
+            else:
+                if verbose:
+                    console.print(f"[yellow][DEBUG] Checking {len(SYMBOLS)} symbols from KuCoin...[/yellow]")
+
+            completed_map = {}
+            symbol_rows_live = [(s, None, None) for s in SYMBOLS]
+
+            with Live(build_table(symbol_rows_live, symbol_age, DISPLAY_LIMIT), refresh_per_second=4, console=console, screen=False) as live:
+                with ThreadPoolExecutor(max_workers=THREAD_WORKERS) as executor:
+                    futures = {executor.submit(fetch_symbol_indicators, symbol, verbose): symbol for symbol in SYMBOLS}
+                    for future in as_completed(futures):
+                        symbol, indicators, used_exchange = future.result()
+                        completed_map[symbol] = (symbol, indicators, used_exchange)
+                        # For live preview, keep all ages, but final age update is after sorting
+                        symbol_rows_live = [completed_map.get(s, (s, None, None)) for s in SYMBOLS]
+                        displayable = [row for row in symbol_rows_live if row[1] is not None]
+                        displayable.sort(key=lambda x: (x[1]['score'] if x[1] else 0), reverse=True)
+                        not_displayed = [row for row in symbol_rows_live if row[1] is None]
+                        table_data = displayable[:DISPLAY_LIMIT] + not_displayed[:max(0, DISPLAY_LIMIT-len(displayable))]
+                        live.update(build_table(table_data, symbol_age, DISPLAY_LIMIT))
+
+                # Final build: only top N
+                symbol_rows = sorted([completed_map[s] for s in SYMBOLS if completed_map[s][1] is not None],
+                                     key=lambda x: (x[1]['score'] if x[1] else 0), reverse=True)
+                top_n_symbols = [row[0] for row in symbol_rows[:DISPLAY_LIMIT] if row[1] is not None]
+                # Update ages: only for coins in top N, reset all others
+                symbol_age = update_symbol_ages(symbol_age, top_n_symbols)
+                # Add placeholders for display
+                symbol_rows = symbol_rows[:DISPLAY_LIMIT]
+                symbol_rows += [completed_map[s] for s in SYMBOLS if completed_map[s][1] is None][:max(0, DISPLAY_LIMIT - len(symbol_rows))]
+
+            # PRINT THE FINAL TABLE PERMANENTLY so your terminal's scrollback works!
+            console.print(build_table(symbol_rows, symbol_age, DISPLAY_LIMIT))
+
+            display_idx = 1
+            for symbol, indicators, used_exchange in symbol_rows:
+                if display_idx > DISPLAY_LIMIT:
+                    break
+                if indicators is None:
+                    continue
+                score = indicators.get("score", 0)
+                conf = indicators.get("confidence", 0)
+                pumptime = indicators.get("pumptime", "N/A")
+                age = symbol_age.get(symbol, 1)
+                triggers = indicators.get("trigger_list", [])
+                num_triggers = len(triggers)
+                trigger_str = " ".join(triggers)
+                status = get_status(num_triggers, score)
+                notable = status in ["🔥 HOT", "🚀 Pump", "🟢 STRONGUPTREND"]
+                result_rows.append({
+                    "rank": display_idx,
+                    "symbol": symbol,
+                    "score": score,
+                    "status": status,
+                    "conf%": conf,
+                    "pumptime": pumptime,
+                    "age": age,
+                    "num_triggers": num_triggers,
+                    "triggers": trigger_str
+                })
+                if notable:
+                    notable_coins.append({
+                        "symbol": symbol,
+                        "score": score,
+                        "status": status,
+                        "triggers": trigger_str
+                    })
+                display_idx += 1
+
+            log_scan(result_rows)
+            console.print("-" * 110)
+
+            panel_content = ""
+            if notable_coins:
+                for coin in notable_coins:
+                    panel_content += f"[bold magenta]{coin['symbol']}[/bold magenta]: [bold]{coin['status']}[/bold] | Score: [bold]{coin['score']}[/bold] | Triggers: [dim]{coin['triggers']}[/dim]\n"
+            else:
+                panel_content = "[red]No notable coins found this scan.[/red]"
+            console.print(Panel(panel_content, title="Notable Coins This Scan (HOT / Pump / STRONGUPTREND)", border_style="bold bright_cyan"))
+
+            cycle_end_time = time.time()
+            if verbose:
+                elapsed = cycle_end_time - cycle_start_time
+                console.print(f"[bold green][VERBOSE] Scan completed in {elapsed:.2f}s for {len(SYMBOLS)} symbols.[/bold green]")
+
+            console.print("-" * 110)
+            console.print("[dim]Press Ctrl+C to exit. Refreshing in 60 seconds...[/dim]\n")
+            time.sleep(60)
+    except KeyboardInterrupt:
+        print("\nExiting gracefully.")
 
 if __name__ == "__main__":
     main()
