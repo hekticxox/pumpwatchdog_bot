@@ -90,7 +90,7 @@ class SignalEngine:
         # Add TA indicators
         df['ema9'] = trend.ema_indicator(df['close'], window=9)
         df['ema21'] = trend.ema_indicator(df['close'], window=21)
-        df['plus_di'] = trend.adx_positive_di(df['high'], df['low'], df['close'])  # Fixed line
+        df['plus_di'] = trend.adx_pos(df['high'], df['low'], df['close'])  # Correct function
 
         # Example scoring logic
         score = 0
