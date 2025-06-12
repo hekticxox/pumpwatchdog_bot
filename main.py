@@ -138,7 +138,7 @@ class SignalEngine:
         df['stoch_k'] = momentum.stoch(df['high'], df['low'], df['close'])
         df['stoch_d'] = momentum.stoch_signal(df['high'], df['low'], df['close'])
         df['adx'] = trend.adx(df['high'], df['low'], df['close'])
-        df['plus_di'] = trend.plus_di(df['high'], df['low'], df['close'])
+        df['plus_di'] = trend.positive_di(df['high'], df['low'], df['close'])
         df['minus_di'] = trend.minus_di(df['high'], df['low'], df['close'])
         bb = volatility.BollingerBands(df['close'])
         df['bb_middle'] = bb.bollinger_mavg()
