@@ -2,6 +2,7 @@ from flask import Flask, render_template_string, jsonify
 import threading
 import json
 import os
+from signal_engine import SignalEngine
 
 app = Flask(__name__)
 
@@ -90,15 +91,15 @@ DASHBOARD_TEMPLATE = """
 """
 
 def get_signals():
-    if os.path.exists(SIGNALS_FILE):
-        with open(SIGNALS_FILE) as f:
-            try:
-                data = json.load(f)
-            except Exception:
-                data = []
-    else:
-        data = []
-    return data
+    engine = SignalEngine()
+    signals = []
+    # Example usage: Replace with your actual symbol list
+    symbols = ["BTC/USDT", "ETH/USDT", "ADA/USDT"]
+    for symbol in symbols:
+        result = engine.analyze(symbol)
+        if result:
+            signals.append(result)
+    return signals
 
 @app.route('/')
 def dashboard():

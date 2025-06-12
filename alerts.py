@@ -1,3 +1,4 @@
+from signal_engine import SignalEngine
 import os
 import requests
 from dotenv import load_dotenv
@@ -33,4 +34,8 @@ def send_alert(msg: str, channel: str = "telegram"):
         print(f"[alerts] Unknown alert channel: {channel}")
 
 if __name__ == "__main__":
-    send_alert("🚨 *Test Alert* — PumpWatchdog is working!", channel="telegram")
+    engine = SignalEngine()
+    result = engine.analyze("BTC/USDT")
+    if result and result["momentum_likely_to_continue"]:
+        msg = f"🚨 *Pump Alert* — {result['symbol']} is showing strong momentum!\n\nScore: {result['score']}\nConfidence: {result['confidence']}%\nTriggers: {', '.join(result['trigger_list'])}"
+        send_alert(msg, channel="telegram")
