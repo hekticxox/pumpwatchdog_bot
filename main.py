@@ -45,7 +45,7 @@ def log_scan(rows, filename=LOG_FILE):
     with open(filename, 'a', newline='') as csvfile:
         fieldnames = [
             "rank", "symbol", "score", "status", "conf%", "pumptime",
-            "age", "num_triggers", "triggers"
+            "age", "num_triggers", "change_15m", "change_30m", "triggers"
         ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         if not file_exists:
@@ -54,6 +54,8 @@ def log_scan(rows, filename=LOG_FILE):
             writer.writerow(row)
 
 def get_status(num_triggers, score):
+    if num_triggers >= 20:
+        return "🟣 PARABOLIC"
     if num_triggers >= 15:
         return "🟢 STRONGUPTREND"
     if score >= 10:
@@ -68,6 +70,8 @@ def get_status(num_triggers, score):
         return "N/A"
 
 def get_status_color(status):
+    if status == "🟣 PARABOLIC":
+        return "bold magenta"
     if status == "🟢 STRONGUPTREND":
         return "bold green"
     if status == "🔥 HOT":
@@ -124,7 +128,9 @@ def build_table(symbol_rows, symbol_age, display_limit=DISPLAY_LIMIT):
     table.add_column("PumpTime", justify="center")
     table.add_column("Age", justify="center")
     table.add_column("#Trig", justify="center")
-    table.add_column("Triggers", overflow="fold")
+    table.add_column("%Δ15m", justify="right")
+    table.add_column("%Δ30m", justify="right")
+    # Triggers column removed from table
 
     display_idx = 1
     for symbol, indicators, used_exchange in symbol_rows[:display_limit]:
@@ -136,11 +142,18 @@ def build_table(symbol_rows, symbol_age, display_limit=DISPLAY_LIMIT):
         age = symbol_age.get(symbol, 1)
         triggers = indicators.get("trigger_list", [])
         num_triggers = len(triggers)
-        trigger_str = " ".join(triggers)
         status = get_status(num_triggers, score)
         status_color = get_status_color(status)
-        notable = status in ["🔥 HOT", "🚀 Pump", "🟢 STRONGUPTREND"]
+        notable = status in ["🟣 PARABOLIC", "🔥 HOT", "🚀 Pump", "🟢 STRONGUPTREND"]
         star = "★" if notable else ""
+        change_15m = indicators.get("change_15m", "N/A")
+        change_30m = indicators.get("change_30m", "N/A")
+        def fmt_pct(val):
+            try:
+                v = float(val)
+                return f"{v:+.2f}%"
+            except:
+                return str(val)
         table.add_row(
             f"{display_idx}{star}",
             f"[white]{symbol}[/white]" if not notable else f"[bold magenta]{symbol}[/bold magenta]",
@@ -150,13 +163,13 @@ def build_table(symbol_rows, symbol_age, display_limit=DISPLAY_LIMIT):
             f"{pumptime}",
             f"{age}",
             f"{num_triggers}",
-            f"[dim]{trigger_str}[/dim]"
+            fmt_pct(change_15m),
+            fmt_pct(change_30m),
         )
         display_idx += 1
     return table
 
 def update_symbol_ages(symbol_age, top_symbols):
-    # Increment age for coins that remain in the top N
     new_symbol_age = {}
     for symbol in top_symbols:
         if symbol in symbol_age:
@@ -201,7 +214,6 @@ def main():
                     for future in as_completed(futures):
                         symbol, indicators, used_exchange = future.result()
                         completed_map[symbol] = (symbol, indicators, used_exchange)
-                        # For live preview, keep all ages, but final age update is after sorting
                         symbol_rows_live = [completed_map.get(s, (s, None, None)) for s in SYMBOLS]
                         displayable = [row for row in symbol_rows_live if row[1] is not None]
                         displayable.sort(key=lambda x: (x[1]['score'] if x[1] else 0), reverse=True)
@@ -209,17 +221,13 @@ def main():
                         table_data = displayable[:DISPLAY_LIMIT] + not_displayed[:max(0, DISPLAY_LIMIT-len(displayable))]
                         live.update(build_table(table_data, symbol_age, DISPLAY_LIMIT))
 
-                # Final build: only top N
                 symbol_rows = sorted([completed_map[s] for s in SYMBOLS if completed_map[s][1] is not None],
                                      key=lambda x: (x[1]['score'] if x[1] else 0), reverse=True)
                 top_n_symbols = [row[0] for row in symbol_rows[:DISPLAY_LIMIT] if row[1] is not None]
-                # Update ages: only for coins in top N, reset all others
                 symbol_age = update_symbol_ages(symbol_age, top_n_symbols)
-                # Add placeholders for display
                 symbol_rows = symbol_rows[:DISPLAY_LIMIT]
                 symbol_rows += [completed_map[s] for s in SYMBOLS if completed_map[s][1] is None][:max(0, DISPLAY_LIMIT - len(symbol_rows))]
 
-            # PRINT THE FINAL TABLE PERMANENTLY so your terminal's scrollback works!
             console.print(build_table(symbol_rows, symbol_age, DISPLAY_LIMIT))
 
             display_idx = 1
@@ -234,9 +242,16 @@ def main():
                 age = symbol_age.get(symbol, 1)
                 triggers = indicators.get("trigger_list", [])
                 num_triggers = len(triggers)
-                trigger_str = " ".join(triggers)
                 status = get_status(num_triggers, score)
-                notable = status in ["🔥 HOT", "🚀 Pump", "🟢 STRONGUPTREND"]
+                notable = status in ["🟣 PARABOLIC", "🔥 HOT", "🚀 Pump", "🟢 STRONGUPTREND"]
+                change_15m = indicators.get("change_15m", "N/A")
+                change_30m = indicators.get("change_30m", "N/A")
+                def fmt_pct(val):
+                    try:
+                        v = float(val)
+                        return f"{v:+.2f}%"
+                    except:
+                        return str(val)
                 result_rows.append({
                     "rank": display_idx,
                     "symbol": symbol,
@@ -246,14 +261,16 @@ def main():
                     "pumptime": pumptime,
                     "age": age,
                     "num_triggers": num_triggers,
-                    "triggers": trigger_str
+                    "change_15m": fmt_pct(change_15m),
+                    "change_30m": fmt_pct(change_30m),
+                    "triggers": " ".join(triggers)  # Log full triggers in CSV only
                 })
                 if notable:
                     notable_coins.append({
                         "symbol": symbol,
                         "score": score,
                         "status": status,
-                        "triggers": trigger_str
+                        "triggers": " ".join(triggers)
                     })
                 display_idx += 1
 
@@ -266,7 +283,7 @@ def main():
                     panel_content += f"[bold magenta]{coin['symbol']}[/bold magenta]: [bold]{coin['status']}[/bold] | Score: [bold]{coin['score']}[/bold] | Triggers: [dim]{coin['triggers']}[/dim]\n"
             else:
                 panel_content = "[red]No notable coins found this scan.[/red]"
-            console.print(Panel(panel_content, title="Notable Coins This Scan (HOT / Pump / STRONGUPTREND)", border_style="bold bright_cyan"))
+            console.print(Panel(panel_content, title="Notable Coins This Scan (PARABOLIC / HOT / Pump / STRONGUPTREND)", border_style="bold bright_cyan"))
 
             cycle_end_time = time.time()
             if verbose:
